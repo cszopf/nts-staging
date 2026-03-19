@@ -7,38 +7,37 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  const fetchProfile = async (sessionUser: any) => {
+    try {
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', sessionUser.id)
+        .single();
+
+      if (profileError) {
+        console.error("Profile Fetch Error:", profileError);
+        return { ...sessionUser };
+      }
+      return { ...sessionUser, ...profileData };
+    } catch (err) {
+      console.error("Profile fetch failed:", err);
+      return { ...sessionUser };
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
 
+    // Initial session check
     const initAuth = async () => {
       try {
-        console.log("1. Starting single-shot auth check...");
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        
-        console.log("2. Session fetched:", session?.user?.email || 'No session');
-        if (sessionError) throw sessionError;
+        const { data: { session } } = await supabase.auth.getSession();
 
         if (session?.user) {
-          console.log("3. User ID found, fetching profile for:", session.user.id);
-          
-          const { data: profileData, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
-          
-          if (profileError) {
-            console.error("Profile Fetch Error:", profileError);
-          } else {
-            console.log("4. Profile Data successfully fetched:", profileData);
-          }
-          
-          if (mounted) {
-            console.log("5. Updating user state with merged data...");
-            setUser({ ...session.user, ...profileData });
-          }
+          const merged = await fetchProfile(session.user);
+          if (mounted) setUser(merged);
         } else {
-          console.log("3. No session user found.");
           if (mounted) setUser(null);
         }
       } catch (err) {
@@ -51,11 +50,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     initAuth();
 
-    // Clean up
+    // Listen for auth state changes (sign in, sign out, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        const merged = await fetchProfile(session.user);
+        if (mounted) setUser(merged);
+      } else {
+        if (mounted) setUser(null);
+      }
+      if (mounted) setLoading(false);
+    });
+
     return () => {
       mounted = false;
+      subscription.unsubscribe();
     };
-  }, []); // Strict empty array, no event listeners
+  }, []);
 
   const signOut = async () => {
     await supabase.auth.signOut();
