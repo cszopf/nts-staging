@@ -553,6 +553,7 @@ async function startServer() {
   });
 
   // 4. Get Estimate (Internal for results page)
+  // Returns camelCase keys to match the frontend expectations
   app.get("/api/net-to-seller/estimate/:id", async (req, res) => {
     const { data: estimate, error } = await supabaseAdmin
       .from('nts_estimates')
@@ -561,7 +562,56 @@ async function startServer() {
       .single();
 
     if (error || !estimate) return res.status(404).json({ error: "Estimate not found" });
-    res.json(estimate);
+
+    // Map snake_case Supabase columns back to camelCase for the frontend
+    res.json({
+      id: estimate.id,
+      userId: estimate.user_id,
+      createdAt: estimate.created_at,
+      updatedAt: estimate.updated_at,
+      addressFull: estimate.address_full,
+      unit: estimate.unit,
+      city: estimate.city,
+      state: estimate.state,
+      zip: estimate.zip,
+      county: estimate.county,
+      isOhio: estimate.is_ohio,
+      placeId: estimate.place_id,
+      lat: estimate.lat,
+      lng: estimate.lng,
+      ownerName: estimate.owner_name,
+      ownerMailingAddress: estimate.owner_mailing_address,
+      parcelNumber: estimate.parcel_number,
+      propertyType: estimate.property_type,
+      beds: estimate.beds,
+      baths: estimate.baths,
+      sqft: estimate.sqft,
+      taxYear: estimate.tax_year,
+      annualTaxes: estimate.annual_taxes,
+      homestead: estimate.homestead,
+      salePrice: estimate.sale_price,
+      closingDate: estimate.closing_date,
+      commissionType: estimate.commission_type,
+      commissionValue: estimate.commission_value,
+      commissionAmount: estimate.commission_amount,
+      sellerCreditsTotal: estimate.seller_credits_total,
+      mortgagePayoffs: estimate.mortgage_payoffs,
+      mortgagePayoffsTotal: estimate.mortgage_payoffs_total,
+      homeWarranty: estimate.home_warranty,
+      hoaMonthly: estimate.hoa_monthly,
+      hoaTransferFee: estimate.hoa_transfer_fee,
+      otherCosts: estimate.other_costs,
+      otherCostsTotal: estimate.other_costs_total,
+      estimatedClosingCostsTotal: estimate.estimated_closing_costs_total,
+      estimatedTitlePremium: estimate.estimated_title_premium,
+      estimatedTransferTax: estimate.estimated_transfer_tax,
+      estimatedTaxProration: estimate.estimated_tax_proration,
+      estimatedNetProceeds: estimate.estimated_net_proceeds,
+      inputsJson: typeof estimate.inputs_json === 'string' ? estimate.inputs_json : JSON.stringify(estimate.inputs_json),
+      calcJson: typeof estimate.calc_json === 'string' ? estimate.calc_json : JSON.stringify(estimate.calc_json),
+      shareToken: estimate.share_token,
+      shareCount: estimate.share_count
+    });
   });
 
   app.post("/api/net-to-seller/prospects", async (req, res) => {
