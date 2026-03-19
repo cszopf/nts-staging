@@ -1,0 +1,5 @@
+{
+  "name": "Net to Seller Calculator | World Class Title",
+  "description": "Generate accurate, instant Net to Seller estimates and market comps with World Class Title.",
+  "requestFramePermissions": ["geolocation"]
+}

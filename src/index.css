@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Nunito+Sans:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-montserrat: "Montserrat", sans-serif;
+  --font-nunito: "Nunito Sans", sans-serif;
+  
+  --color-wct-blue: #004EA8;
+  --color-wct-teal: #64CCC9;
+  --color-wct-light-blue: #B9D9EB;
+  --color-wct-slate: #A2B2C8;
+}
+
+@layer base {
+  body {
+    @apply font-nunito bg-white text-wct-blue antialiased;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-montserrat uppercase tracking-[1.5px] font-bold;
+  }
+
+  .font-subheader {
+    @apply font-montserrat font-normal normal-case tracking-normal;
+  }
+}
+
+/* Google Places Autocomplete Styling */
+.pac-container {
+  @apply rounded-xl border border-[#A2B2C8]/30 shadow-xl font-nunito mt-1 overflow-hidden;
+  z-index: 9999 !important;
+}
+
+.pac-item {
+  @apply px-4 py-3 border-[#A2B2C8]/10 cursor-pointer hover:bg-[#004EA8]/5 transition-colors flex items-center gap-2;
+}
+
+.pac-item-query {
+  @apply text-[#004EA8] font-semibold text-sm;
+}
+
+.pac-matched {
+  @apply text-[#64CCC9];
+}
+
+.pac-icon {
+  @apply opacity-50;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.animate-shake {
+  animation: shake 0.2s ease-in-out 0s 2;
+}
+
+body.retro-theme {
+  background-color: #000000 !important;
+  color: #39ff14 !important; /* Neon Green */
+  font-family: 'Press Start 2P', monospace !important;
+}
+
+body.retro-theme div,
+body.retro-theme p,
+body.retro-theme h1,
+body.retro-theme h2,
+body.retro-theme h3,
+body.retro-theme span,
+body.retro-theme input,
+body.retro-theme button {
+  font-family: 'Press Start 2P', monospace !important;
+  background-color: transparent !important;
+  color: #39ff14 !important;
+  border-color: #39ff14 !important;
+  box-shadow: none !important;
+  border-radius: 0px !important;
+}
+
+body.retro-theme input,
+body.retro-theme button {
+  border: 2px solid #39ff14 !important;
+  padding: 10px;
+}
+
+body.retro-theme button:hover {
+  background-color: #39ff14 !important;
+  color: #000000 !important;
+  cursor: pointer;
+}
