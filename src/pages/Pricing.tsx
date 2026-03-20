@@ -24,7 +24,7 @@ const PLANS = [
     icon: Zap,
     features: [
       '100 skip trace credits/month',
-      'All Ohio counties',
+      '1 state coverage',
       'Net-to-Seller calculator',
       'AI email summaries',
       'PDF exports',
@@ -39,7 +39,7 @@ const PLANS = [
     icon: Target,
     features: [
       '400 skip trace credits/month',
-      'All Ohio counties',
+      '3 state coverage',
       'Neighborhood Prospector',
       'Contact Scrubber',
       'CSV lead exports',
@@ -55,6 +55,7 @@ const PLANS = [
     icon: Shield,
     features: [
       '1,500 skip trace credits/month',
+      '10 state coverage',
       'Everything in Professional',
       'Team seats',
       'White-label reports',
@@ -70,6 +71,7 @@ const PLANS = [
     icon: Building2,
     features: [
       '5,000 skip trace credits/month',
+      'National coverage (all states)',
       'Everything in Agency',
       'Full platform access',
       'Dedicated account manager',
