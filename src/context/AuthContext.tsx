@@ -9,6 +9,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const fetchProfile = async (sessionUser: any) => {
     try {
+      console.log('Fetching profile for user:', sessionUser.id);
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
@@ -16,9 +17,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         .single();
 
       if (profileError) {
-        console.error("Profile Fetch Error:", profileError);
+        console.error("Profile Fetch Error:", profileError.message, profileError.code);
         return { ...sessionUser };
       }
+      console.log('Profile fetched:', profileData?.is_wct_vip, profileData?.skip_trace_credits);
       return { ...sessionUser, ...profileData };
     } catch (err) {
       console.error("Profile fetch failed:", err);
@@ -52,13 +54,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     // Listen for auth state changes (sign in, sign out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, session?.user?.email);
       if (session?.user) {
         const merged = await fetchProfile(session.user);
-        if (mounted) setUser(merged);
+        if (mounted) {
+          setUser(merged);
+          setLoading(false);
+        }
       } else {
-        if (mounted) setUser(null);
+        if (mounted) {
+          setUser(null);
+          setLoading(false);
+        }
       }
-      if (mounted) setLoading(false);
     });
 
     return () => {

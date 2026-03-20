@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { WCT_CONFIG } from "./src/constants/config";
 import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +19,17 @@ const supabaseAdmin = createClient(
   supabaseUrl,
   process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseKey
 );
+
+// Stripe setup
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2025-04-30.basil' });
+
+// Map Stripe price IDs to plan details
+const STRIPE_PLANS: Record<string, { name: string; credits: number; level: string }> = {
+  'price_1TCo5UHeCwA1mbZB1xLEn9Su': { name: 'WCT Starter', credits: 100, level: 'Starter' },
+  'price_1TCo5bHeCwA1mbZB3qptCbTz': { name: 'WCT Professional', credits: 400, level: 'Professional' },
+  'price_1TCo5fHeCwA1mbZBSVEGAiN8': { name: 'WCT Agency', credits: 1500, level: 'Agency' },
+  'price_1TCo5lHeCwA1mbZBwhb2unde': { name: 'WCT Enterprise', credits: 5000, level: 'Enterprise' },
+};
 
 const cleanNum = (val: any): number => {
   if (typeof val === 'number') return val;
@@ -97,8 +109,97 @@ function calculateTitlePremium(salePrice: number, policyType: string, reissueEna
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
   const PORT = 3000;
+
+  // Stripe webhook must be registered BEFORE express.json() to get raw body
+  app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'] as string;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+      console.error('STRIPE_WEBHOOK_SECRET not set');
+      return res.status(500).json({ error: 'Webhook secret not configured' });
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      console.error('Webhook signature verification failed:', err.message);
+      return res.status(400).json({ error: `Webhook Error: ${err.message}` });
+    }
+
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const userId = session.metadata?.userId;
+      const priceId = session.metadata?.priceId;
+
+      if (userId && priceId && STRIPE_PLANS[priceId]) {
+        const plan = STRIPE_PLANS[priceId];
+        console.log(`Activating ${plan.name} for user ${userId}: ${plan.credits} credits`);
+
+        await supabaseAdmin
+          .from('profiles')
+          .update({
+            membership_level: plan.level,
+            skip_trace_credits: plan.credits,
+            is_wct_vip: plan.level === 'Enterprise' || plan.level === 'Agency',
+            stripe_customer_id: session.customer,
+            stripe_subscription_id: session.subscription,
+          })
+          .eq('id', userId);
+      }
+    }
+
+    if (event.type === 'invoice.paid') {
+      const invoice = event.data.object as Stripe.Invoice;
+      const subscriptionId = invoice.subscription as string;
+
+      if (subscriptionId) {
+        const { data: profile } = await supabaseAdmin
+          .from('profiles')
+          .select('id, stripe_subscription_id')
+          .eq('stripe_subscription_id', subscriptionId)
+          .single();
+
+        if (profile) {
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          const priceId = sub.items.data[0]?.price?.id;
+          if (priceId && STRIPE_PLANS[priceId]) {
+            await supabaseAdmin
+              .from('profiles')
+              .update({ skip_trace_credits: STRIPE_PLANS[priceId].credits })
+              .eq('id', profile.id);
+          }
+        }
+      }
+    }
+
+    if (event.type === 'customer.subscription.deleted') {
+      const subscription = event.data.object as Stripe.Subscription;
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('stripe_subscription_id', subscription.id)
+        .single();
+
+      if (profile) {
+        await supabaseAdmin
+          .from('profiles')
+          .update({
+            membership_level: 'Free',
+            skip_trace_credits: 0,
+            is_wct_vip: false,
+            stripe_subscription_id: null,
+          })
+          .eq('id', profile.id);
+      }
+    }
+
+    res.json({ received: true });
+  });
+
+  app.use(express.json());
 
   app.post("/api/net-to-seller/property-lookup", async (req, res) => {
     const { placeId, addressFull, lat, lng, city, state, zip } = req.body;
@@ -1128,6 +1229,32 @@ async function startServer() {
     } catch (error: any) {
       console.error("Skip Trace API Error:", error);
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ Stripe Checkout ═══
+  app.post('/api/stripe/create-checkout', async (req, res) => {
+    const { priceId, userId, email } = req.body;
+
+    if (!priceId || !userId) {
+      return res.status(400).json({ error: 'Missing priceId or userId' });
+    }
+
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        customer_email: email,
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: `${req.headers.origin || 'https://nts-staging.onrender.com'}/?checkout=success`,
+        cancel_url: `${req.headers.origin || 'https://nts-staging.onrender.com'}/pricing?checkout=cancelled`,
+        metadata: { userId, priceId },
+      });
+
+      res.json({ url: session.url });
+    } catch (err: any) {
+      console.error('Stripe checkout error:', err);
+      res.status(500).json({ error: err.message });
     }
   });
 

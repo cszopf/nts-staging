@@ -687,8 +687,8 @@ const Results = () => {
                 <p className="text-slate-500 mb-8 max-w-md mx-auto">
                   Unlock Neighborhood Prospector: See 15 homeowners near this address statistically likely to sell.
                 </p>
-                <WCTButton 
-                  onClick={() => window.location.href = 'mailto:Hello@WorldClassTitle.com?subject=Upgrade%20to%20Neighborhood%20Prospector'}
+                <WCTButton
+                  onClick={() => navigate('/pricing')}
                   className="bg-[#004EA8] hover:bg-[#003d82] px-8 text-sm font-bold uppercase tracking-widest"
                 >
                   Upgrade to Unlock

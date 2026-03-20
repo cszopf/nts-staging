@@ -7,6 +7,7 @@ import NeighborhoodProspector from './pages/NeighborhoodProspector';
 import AdminDashboard from './pages/AdminDashboard';
 import AgentDashboard from './pages/AgentDashboard';
 import ContactScrubber from './pages/ContactScrubber';
+import Pricing from './pages/Pricing';
 import { AuthProvider } from './context/AuthContext';
 import { UpdatePasswordModal } from './components/UpdatePasswordModal';
 import { supabase } from './lib/supabase';
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/dashboard" element={<AgentDashboard />} />
             <Route path="/scrubber" element={<ContactScrubber />} />
+            <Route path="/pricing" element={<Pricing />} />
             
             {/* Legacy Redirects */}
             <Route path="/net-to-seller" element={<Navigate to="/calculator" replace />} />

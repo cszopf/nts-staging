@@ -28,7 +28,7 @@ const Home = () => {
     if (hasProspectorAccess) {
       navigate('/prospector');
     } else {
-      alert('Upgrade required. Please contact Hello@WorldClassTitle.com to unlock lead generation.');
+      navigate('/pricing');
     }
   };
 
@@ -169,13 +169,14 @@ const Home = () => {
                   <ChevronRight className="w-4 h-4 ml-1" />
                 </WCTButton>
               ) : (
-                <WCTButton 
+                <WCTButton
                   onClick={handleProspectorClick}
                   fullWidth
                   variant="outline"
-                  className="h-12 text-sm font-bold uppercase tracking-widest border-slate-300 text-slate-400 hover:bg-transparent cursor-not-allowed"
+                  className="h-12 text-sm font-bold uppercase tracking-widest border-slate-300 text-slate-400 hover:border-[#004EA8] hover:text-[#004EA8]"
                 >
-                  Premium Feature - Locked
+                  View Plans
+                  <ChevronRight className="w-4 h-4 ml-1" />
                 </WCTButton>
               )}
             </div>
@@ -210,8 +211,8 @@ const Home = () => {
                 Upload your database to identify who in your sphere is most likely to sell.
               </p>
 
-              <WCTButton 
-                onClick={() => navigate('/scrubber')}
+              <WCTButton
+                onClick={() => navigate(hasScrubberAccess ? '/scrubber' : '/pricing')}
                 fullWidth
                 variant={hasScrubberAccess ? 'primary' : 'outline'}
                 className={`h-12 text-sm font-bold uppercase tracking-widest ${

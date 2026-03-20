@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Mail, Lock, User, Phone, Building, ArrowRight, AlertCircle } from 'lucide-react';
+import { X, Mail, User, Phone, Building, ArrowRight, AlertCircle } from 'lucide-react';
 import { WCTButton, WCTInput } from './WCTComponents';
 import { supabase } from '../lib/supabase';
 
@@ -12,15 +12,12 @@ interface AuthModalProps {
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [resetMode, setResetMode] = useState(false);
-  const [resetSuccess, setResetSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [signupSuccess, setSignupSuccess] = useState(false);
-  
+  const [linkSent, setLinkSent] = useState(false);
+
   const [formData, setFormData] = useState({
     email: '',
-    password: '',
     name: '',
     phone: '',
     brokerage: ''
@@ -30,53 +27,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     e.preventDefault();
     setLoading(true);
     setError(null);
-    
+
     try {
-      if (resetMode) {
-        const { error: resetError } = await supabase.auth.resetPasswordForEmail(formData.email, {
-          redirectTo: window.location.origin,
-        });
-        if (resetError) throw resetError;
-        setResetSuccess(true);
-      } else if (mode === 'signup') {
-        const { data, error: signUpError } = await supabase.auth.signUp({
+      if (mode === 'signup') {
+        // Sign up with magic link — creates account + sends link in one step
+        const { error: signUpError } = await supabase.auth.signInWithOtp({
           email: formData.email,
-          password: formData.password,
           options: {
             data: {
               full_name: formData.name,
               phone_number: formData.phone,
               brokerage: formData.brokerage
-            }
+            },
+            emailRedirectTo: window.location.origin,
           }
         });
 
         if (signUpError) throw signUpError;
-        
-        if (data.user) {
-          setSignupSuccess(true);
-        }
+        setLinkSent(true);
       } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
+        // Sign in with magic link
+        const { error: signInError } = await supabase.auth.signInWithOtp({
           email: formData.email,
-          password: formData.password,
+          options: {
+            emailRedirectTo: window.location.origin,
+          }
         });
 
         if (signInError) throw signInError;
-        onSuccess();
+        setLinkSent(true);
       }
     } catch (err: any) {
       console.error('Auth error:', err);
-      let message = err.message || 'An error occurred during authentication';
-      if (message === 'Invalid login credentials') {
-        message = 'Invalid email or password. If you just signed up, please ensure you have confirmed your email address.';
-      } else if (message === 'User already registered') {
-        message = 'This email is already registered. Please try signing in instead. If you forgot your password, use the "Forgot Password" link.';
-      }
-      setError(message);
+      setError(err.message || 'An error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClose = () => {
+    setLinkSent(false);
+    setError(null);
+    setMode('signin');
+    onClose();
   };
 
   if (!isOpen) return null;
@@ -98,24 +91,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           {/* Header */}
           <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
             <h2 className="text-xl font-bold text-[#004EA8]">
-              {resetSuccess ? 'Check Your Email' : resetMode ? 'Reset Password' : signupSuccess ? 'Account Created' : mode === 'signin' ? 'Welcome Back' : 'Create Account'}
+              {linkSent ? 'Check Your Email' : mode === 'signin' ? 'Welcome Back' : 'Create Account'}
             </h2>
-            <button 
-              onClick={onClose}
+            <button
+              onClick={handleClose}
               className="text-gray-400 hover:text-gray-600 transition-colors p-1 hover:bg-gray-100 rounded-full"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          {!signupSuccess && !resetMode && (
+          {!linkSent && (
             /* Tabs */
             <div className="flex border-b border-gray-100">
               <button
                 className={`flex-1 py-3 text-sm font-medium transition-colors relative ${
                   mode === 'signin' ? 'text-[#004EA8]' : 'text-gray-500 hover:text-gray-700'
                 }`}
-                onClick={() => setMode('signin')}
+                onClick={() => { setMode('signin'); setError(null); }}
               >
                 Sign In
                 {mode === 'signin' && (
@@ -126,7 +119,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 className={`flex-1 py-3 text-sm font-medium transition-colors relative ${
                   mode === 'signup' ? 'text-[#004EA8]' : 'text-gray-500 hover:text-gray-700'
                 }`}
-                onClick={() => setMode('signup')}
+                onClick={() => { setMode('signup'); setError(null); }}
               >
                 Create Account
                 {mode === 'signup' && (
@@ -138,29 +131,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
           {/* Content */}
           <div className="p-6 overflow-y-auto">
-            {resetSuccess ? (
+            {linkSent ? (
               <div className="text-center py-4">
                 <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6">
                   <Mail className="w-8 h-8 text-[#004EA8]" />
                 </div>
                 <h3 className="text-2xl font-bold text-gray-900 mb-2">Check Your Email</h3>
                 <p className="text-gray-600 mb-8">
-                  If an account exists, we have sent a password reset link to <span className="font-semibold text-gray-900">{formData.email}</span>.
+                  We sent a sign-in link to <span className="font-semibold text-gray-900">{formData.email}</span>. Click the link in that email to {mode === 'signup' ? 'activate your account' : 'sign in'}.
                 </p>
-                <WCTButton onClick={() => { setResetMode(false); setResetSuccess(false); }} fullWidth>
-                  Back to Sign In
-                </WCTButton>
-              </div>
-            ) : signupSuccess ? (
-              <div className="text-center py-4">
-                <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <Mail className="w-8 h-8 text-green-500" />
-                </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">Check Your Email</h3>
-                <p className="text-gray-600 mb-8">
-                  Welcome to World Class Title! We just sent a confirmation link to <span className="font-semibold text-gray-900">{formData.email}</span>. Please click the link in that email to activate your account.
+                <p className="text-xs text-gray-400 mb-6">
+                  The link expires in 1 hour. Check your spam folder if you don't see it.
                 </p>
-                <WCTButton onClick={onClose} fullWidth>
+                <WCTButton onClick={handleClose} fullWidth variant="outline">
                   Close
                 </WCTButton>
               </div>
@@ -173,109 +156,62 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                   </div>
                 )}
                 <form onSubmit={handleSubmit} className="space-y-4">
-                  {resetMode ? (
+                  {mode === 'signup' && (
                     <>
-                      <p className="text-sm text-gray-600 mb-4">
-                        Enter your email address and we'll send you a link to reset your password.
-                      </p>
                       <WCTInput
-                        label="Email Address"
-                        icon={Mail}
-                        type="email"
-                        value={formData.email}
-                        onChange={e => setFormData({...formData, email: e.target.value})}
+                        label="Full Name"
+                        icon={User}
+                        value={formData.name}
+                        onChange={e => setFormData({...formData, name: e.target.value})}
                         required
                       />
-                    </>
-                  ) : (
-                    <>
-                      {mode === 'signup' && (
-                        <>
-                          <WCTInput
-                            label="Full Name"
-                            icon={User}
-                            value={formData.name}
-                            onChange={e => setFormData({...formData, name: e.target.value})}
-                            required
-                          />
-                          <WCTInput
-                            label="Phone Number"
-                            icon={Phone}
-                            type="tel"
-                            value={formData.phone}
-                            onChange={e => setFormData({...formData, phone: e.target.value})}
-                            required
-                          />
-                          <WCTInput
-                            label="Brokerage"
-                            icon={Building}
-                            value={formData.brokerage}
-                            onChange={e => setFormData({...formData, brokerage: e.target.value})}
-                            required
-                          />
-                        </>
-                      )}
-                      
                       <WCTInput
-                        label="Email Address"
-                        icon={Mail}
-                        type="email"
-                        value={formData.email}
-                        onChange={e => setFormData({...formData, email: e.target.value})}
+                        label="Phone Number"
+                        icon={Phone}
+                        type="tel"
+                        value={formData.phone}
+                        onChange={e => setFormData({...formData, phone: e.target.value})}
                         required
                       />
-                      
                       <WCTInput
-                        label="Password"
-                        icon={Lock}
-                        type="password"
-                        value={formData.password}
-                        onChange={e => setFormData({...formData, password: e.target.value})}
+                        label="Brokerage"
+                        icon={Building}
+                        value={formData.brokerage}
+                        onChange={e => setFormData({...formData, brokerage: e.target.value})}
                         required
                       />
-
-                      {mode === 'signin' && (
-                        <div className="flex justify-end">
-                          <button 
-                            type="button"
-                            onClick={() => setResetMode(true)}
-                            className="text-xs text-[#004EA8] hover:underline font-medium"
-                          >
-                            Forgot Password?
-                          </button>
-                        </div>
-                      )}
                     </>
                   )}
+
+                  <WCTInput
+                    label="Email Address"
+                    icon={Mail}
+                    type="email"
+                    value={formData.email}
+                    onChange={e => setFormData({...formData, email: e.target.value})}
+                    required
+                  />
+
+                  <p className="text-xs text-gray-500 text-center">
+                    We'll email you a magic link — no password needed.
+                  </p>
 
                   <div className="pt-2">
                     <WCTButton type="submit" fullWidth disabled={loading}>
                       {loading ? (
-                        'Processing...'
+                        'Sending...'
                       ) : (
                         <span className="flex items-center justify-center gap-2">
-                          {resetMode ? 'Send Reset Link' : mode === 'signin' ? 'Sign In' : 'Create Account'} 
+                          {mode === 'signin' ? 'Send Magic Link' : 'Create Account'}
                           <ArrowRight className="w-4 h-4" />
                         </span>
                       )}
                     </WCTButton>
                   </div>
-                  
-                  {resetMode && (
-                    <button
-                      type="button"
-                      onClick={() => setResetMode(false)}
-                      className="w-full text-center text-sm text-gray-500 hover:text-gray-700 mt-4"
-                    >
-                      Back to Sign In
-                    </button>
-                  )}
 
-                  {!resetMode && (
-                    <p className="text-xs text-center text-gray-400 mt-4">
-                      By continuing, you agree to our Terms of Service and Privacy Policy.
-                    </p>
-                  )}
+                  <p className="text-xs text-center text-gray-400 mt-4">
+                    By continuing, you agree to our Terms of Service and Privacy Policy.
+                  </p>
                 </form>
               </>
             )}
