@@ -959,7 +959,7 @@ async function startServer() {
       const credits = profile?.skip_trace_credits || 0;
 
       if (!isVip && credits <= 0) {
-        return res.status(402).json({ error: 'Insufficient credits. Please contact WCT Admin to upgrade.' });
+        return res.status(402).json({ error: 'Insufficient credits. Please upgrade your plan.', upgrade: true });
       }
 
       // 2. Check Vault

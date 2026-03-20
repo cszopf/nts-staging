@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, Mail, Sparkles, Loader2, Phone, MessageSquare } from 'lucide-react';
 import { WCTCard, WCTButton } from './WCTComponents';
@@ -26,6 +27,7 @@ const maskAddress = (address: string) => {
 };
 
 export const ProspectCard: React.FC<ProspectCardProps> = ({ lead, idx, initialUnlockedData }) => {
+  const navigate = useNavigate();
   const { user, refreshProfile } = useAuth();
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [liveData, setLiveData] = useState<any>(initialUnlockedData || null);
@@ -40,13 +42,13 @@ export const ProspectCard: React.FC<ProspectCardProps> = ({ lead, idx, initialUn
 
   const handleUnlock = async () => {
     if (!user) {
-      alert("Please sign in to unlock contact info.");
+      navigate('/pricing');
       return;
     }
 
     const hasCredits = user?.is_wct_vip || (user?.skip_trace_credits || 0) > 0;
     if (!hasCredits) {
-      alert("You have 0 credits. Please contact WCT Admin to upgrade.");
+      navigate('/pricing');
       return;
     }
 
