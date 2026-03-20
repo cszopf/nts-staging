@@ -38,7 +38,7 @@ export const ProspectCard: React.FC<ProspectCardProps> = ({ lead, idx, initialUn
     }
   }, [liveData]);
 
-  const isLocked = !user?.is_wct_vip && !liveData;
+  const isLocked = !(user?.plan === 'Enterprise' || user?.plan === 'Agency') && !liveData;
 
   const handleUnlock = async () => {
     if (!user) {
@@ -46,7 +46,7 @@ export const ProspectCard: React.FC<ProspectCardProps> = ({ lead, idx, initialUn
       return;
     }
 
-    const hasCredits = user?.is_wct_vip || (user?.skip_trace_credits || 0) > 0;
+    const hasCredits = user?.plan === 'Enterprise' || user?.plan === 'Agency' || (user?.credit_balance || 0) > 0;
     if (!hasCredits) {
       navigate('/pricing');
       return;

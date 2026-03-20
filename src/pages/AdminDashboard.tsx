@@ -30,8 +30,8 @@ interface UserProfile {
   full_name: string;
   email: string;
   brokerage: string;
-  is_wct_vip: boolean;
-  skip_trace_credits: number;
+  plan: string;
+  credit_balance: number;
   created_at: string;
   is_admin: boolean;
   company_name: string | null;
@@ -79,7 +79,7 @@ export default function AdminDashboard() {
     try {
       // Fetch Users
       const { data: userData, error: userError } = await supabase
-        .from('profiles')
+        .from('users')
         .select('*')
         .order('created_at', { ascending: false });
 
@@ -184,18 +184,19 @@ export default function AdminDashboard() {
     }));
   };
 
-  const toggleVip = async (userId: string, currentStatus: boolean) => {
+  const togglePlan = async (userId: string, currentPlan: string) => {
     setUpdatingId(userId);
+    const newPlan = (currentPlan === 'Enterprise' || currentPlan === 'Agency') ? 'Free' : 'Enterprise';
     try {
       const { error } = await supabase
-        .from('profiles')
-        .update({ is_wct_vip: !currentStatus })
+        .from('users')
+        .update({ plan: newPlan })
         .eq('id', userId);
 
       if (error) throw error;
-      
-      setUsers(users.map(u => u.id === userId ? { ...u, is_wct_vip: !currentStatus } : u));
-      setSuccessMessage('VIP status updated successfully');
+
+      setUsers(users.map(u => u.id === userId ? { ...u, plan: newPlan } : u));
+      setSuccessMessage('Plan updated successfully');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
       setError(err.message);
@@ -208,13 +209,13 @@ export default function AdminDashboard() {
     setUpdatingId(userId);
     try {
       const { error } = await supabase
-        .from('profiles')
-        .update({ skip_trace_credits: credits })
+        .from('users')
+        .update({ credit_balance: credits })
         .eq('id', userId);
 
       if (error) throw error;
-      
-      setUsers(users.map(u => u.id === userId ? { ...u, skip_trace_credits: credits } : u));
+
+      setUsers(users.map(u => u.id === userId ? { ...u, credit_balance: credits } : u));
       setSuccessMessage('Credits updated successfully');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
@@ -228,7 +229,7 @@ export default function AdminDashboard() {
     setUpdatingId(userId);
     try {
       const { error } = await supabase
-        .from('profiles')
+        .from('users')
         .update({ company_name: companyName })
         .eq('id', userId);
 
@@ -454,8 +455,8 @@ export default function AdminDashboard() {
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">User Details</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Brokerage</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Assigned Company</th>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">VIP / MVP</th>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Skip Trace Credits</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Plan</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Credits</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -490,10 +491,10 @@ export default function AdminDashboard() {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex justify-center">
-                          <input 
+                          <input
                             type="checkbox"
-                            checked={u.is_wct_vip}
-                            onChange={() => toggleVip(u.id, u.is_wct_vip)}
+                            checked={u.plan === 'Enterprise' || u.plan === 'Agency'}
+                            onChange={() => togglePlan(u.id, u.plan)}
                             disabled={updatingId === u.id}
                             className="w-5 h-5 rounded border-slate-300 text-[#004EA8] focus:ring-[#004EA8] cursor-pointer"
                           />
@@ -501,10 +502,10 @@ export default function AdminDashboard() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <input 
+                          <input
                             type="number"
                             id={`credits-${u.id}`}
-                            defaultValue={u.skip_trace_credits}
+                            defaultValue={u.credit_balance}
                             className="w-20 px-2 py-1 text-sm border border-slate-200 rounded focus:outline-none focus:border-[#004EA8]"
                           />
                           <button 

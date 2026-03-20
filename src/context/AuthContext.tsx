@@ -11,7 +11,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       console.log('Fetching profile for user:', sessionUser.id);
       const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
+        .from('users')
         .select('*')
         .eq('id', sessionUser.id)
         .single();
@@ -20,7 +20,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         console.error("Profile Fetch Error:", profileError.message, profileError.code);
         return { ...sessionUser };
       }
-      console.log('Profile fetched:', profileData?.is_wct_vip, profileData?.skip_trace_credits);
+      console.log('Profile fetched:', profileData?.plan, profileData?.credit_balance);
       return { ...sessionUser, ...profileData };
     } catch (err) {
       console.error("Profile fetch failed:", err);
@@ -84,7 +84,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const refreshProfile = async () => {
     if (!user?.id) return;
     const { data: profileData, error } = await supabase
-      .from('profiles')
+      .from('users')
       .select('*')
       .eq('id', user.id)
       .single();

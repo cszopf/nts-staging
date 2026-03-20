@@ -41,7 +41,7 @@ const Results = () => {
   const [thinkingStep, setThinkingStep] = useState(0);
   const resultsRef = React.useRef<HTMLDivElement>(null);
 
-  const hasProspectorAccess = user?.is_wct_vip || (user?.skip_trace_credits && user.skip_trace_credits > 0);
+  const hasProspectorAccess = user?.plan === 'Enterprise' || user?.plan === 'Agency' || (user?.credit_balance && user.credit_balance > 0);
 
   useEffect(() => {
     if (estimate?.lat && estimate?.lng && hasProspectorAccess && !hasSearched && !isLoadingProspects) {
@@ -334,7 +334,7 @@ const Results = () => {
   const inputs = estimate.inputsJson ? JSON.parse(estimate.inputsJson) : {};
   const isHomeowner = inputs.policyType === 'homeowner';
 
-  const isLocked = !user?.is_wct_vip && (user?.skip_trace_credits || 0) <= 0;
+  const isLocked = !(user?.plan === 'Enterprise' || user?.plan === 'Agency') && (user?.credit_balance || 0) <= 0;
 
   return (
     <div className="min-h-screen bg-wct-slate/5 py-12 px-6 flex flex-col items-center">
@@ -345,7 +345,7 @@ const Results = () => {
             <div className="flex flex-col items-end">
               <p className="text-xs font-bold text-[#004EA8]">{user.full_name || user.email}</p>
               <p className="text-[10px] text-gray-400 uppercase tracking-widest">
-                {user.is_wct_vip ? 'VIP / MVP' : 'FREE TIER'} • {user.skip_trace_credits || 0} Credits
+                {(user.plan === 'Enterprise' || user.plan === 'Agency') ? user.plan : 'FREE TIER'} • {user.credit_balance || 0} Credits
               </p>
             </div>
             <button 

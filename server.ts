@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { WCT_CONFIG } from "./src/constants/config";
 import { createClient } from '@supabase/supabase-js';
 import Stripe from 'stripe';
+import twilio from 'twilio';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,13 +140,12 @@ async function startServer() {
         console.log(`Activating ${plan.name} for user ${userId}: ${plan.credits} credits`);
 
         await supabaseAdmin
-          .from('profiles')
+          .from('users')
           .update({
-            membership_level: plan.level,
-            skip_trace_credits: plan.credits,
-            is_wct_vip: plan.level === 'Enterprise' || plan.level === 'Agency',
-            stripe_customer_id: session.customer,
-            stripe_subscription_id: session.subscription,
+            plan: plan.level,
+            credit_balance: plan.credits,
+            stripe_customer_id: session.customer as string,
+            subscription_status: 'active',
           })
           .eq('id', userId);
       }
@@ -157,9 +157,9 @@ async function startServer() {
 
       if (subscriptionId) {
         const { data: profile } = await supabaseAdmin
-          .from('profiles')
-          .select('id, stripe_subscription_id')
-          .eq('stripe_subscription_id', subscriptionId)
+          .from('users')
+          .select('id, stripe_customer_id')
+          .eq('stripe_customer_id', invoice.customer as string)
           .single();
 
         if (profile) {
@@ -167,8 +167,8 @@ async function startServer() {
           const priceId = sub.items.data[0]?.price?.id;
           if (priceId && STRIPE_PLANS[priceId]) {
             await supabaseAdmin
-              .from('profiles')
-              .update({ skip_trace_credits: STRIPE_PLANS[priceId].credits })
+              .from('users')
+              .update({ credit_balance: STRIPE_PLANS[priceId].credits })
               .eq('id', profile.id);
           }
         }
@@ -178,19 +178,18 @@ async function startServer() {
     if (event.type === 'customer.subscription.deleted') {
       const subscription = event.data.object as Stripe.Subscription;
       const { data: profile } = await supabaseAdmin
-        .from('profiles')
+        .from('users')
         .select('id')
-        .eq('stripe_subscription_id', subscription.id)
+        .eq('stripe_customer_id', subscription.customer as string)
         .single();
 
       if (profile) {
         await supabaseAdmin
-          .from('profiles')
+          .from('users')
           .update({
-            membership_level: 'Free',
-            skip_trace_credits: 0,
-            is_wct_vip: false,
-            stripe_subscription_id: null,
+            plan: 'Free',
+            credit_balance: 0,
+            subscription_status: 'canceled',
           })
           .eq('id', profile.id);
       }
@@ -948,15 +947,15 @@ async function startServer() {
     try {
       // 1. Check Profile & Credits
       const { data: profile, error: profileError } = await supabaseAdmin
-        .from('profiles')
-        .select('is_wct_vip, skip_trace_credits')
+        .from('users')
+        .select('plan, credit_balance')
         .eq('id', user.id)
         .single();
 
       if (profileError) throw new Error('Could not verify user profile');
 
-      const isVip = profile?.is_wct_vip === true;
-      const credits = profile?.skip_trace_credits || 0;
+      const isVip = profile?.plan === 'Enterprise' || profile?.plan === 'Agency';
+      const credits = profile?.credit_balance || 0;
 
       if (!isVip && credits <= 0) {
         return res.status(402).json({ error: 'Insufficient credits. Please upgrade your plan.', upgrade: true });
@@ -1082,8 +1081,8 @@ async function startServer() {
       // 4. Deduct Credits
       if (!isVip) {
         await supabaseAdmin
-          .from('profiles')
-          .update({ skip_trace_credits: credits - 1 })
+          .from('users')
+          .update({ credit_balance: credits - 1 })
           .eq('id', user.id);
       }
 
@@ -1229,6 +1228,610 @@ async function startServer() {
     } catch (error: any) {
       console.error("Skip Trace API Error:", error);
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ Twilio SMS Webhook ═══
+
+  // Helper: Format property data into a concise SMS response
+  function formatSMSResponse(data: {
+    address: string;
+    ownerName: string;
+    avmValue: number;
+    lastSalePrice: number;
+    lastSaleYear: string;
+    beds: number;
+    baths: number;
+    sqft: number;
+    yearBuilt: number;
+    phone: string;
+    email: string;
+    likelyToSellScore: number;
+    creditsRemaining: number;
+  }): string {
+    const fmtPrice = (v: number) => v ? `$${v.toLocaleString()}` : 'N/A';
+    return [
+      `🏠 ${data.address}`,
+      `👤 ${data.ownerName || 'Unknown'}`,
+      `💰 AVM: ${fmtPrice(data.avmValue)} | Last Sale: ${fmtPrice(data.lastSalePrice)} (${data.lastSaleYear || 'N/A'})`,
+      `🏡 ${data.beds}bd/${data.baths}ba | ${data.sqft ? data.sqft.toLocaleString() : '?'} sqft | Built ${data.yearBuilt || 'N/A'}`,
+      data.phone ? `📞 ${data.phone}` : '',
+      data.email ? `📧 ${data.email}` : '',
+      `📊 Likely to Sell: ${data.likelyToSellScore}/10`,
+      `💳 Credits: ${data.creditsRemaining}`
+    ].filter(Boolean).join('\n');
+  }
+
+  // Helper: Generate vCard string for a property contact
+  function generateVCard(data: {
+    ownerName: string;
+    phone: string;
+    email: string;
+    address: string;
+    avmValue: number;
+  }): string {
+    return [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      `FN:${data.ownerName || 'Unknown Owner'}`,
+      data.phone ? `TEL;TYPE=CELL:${data.phone}` : '',
+      data.email ? `EMAIL:${data.email}` : '',
+      `NOTE:Property: ${data.address}\\nAVM: $${data.avmValue ? data.avmValue.toLocaleString() : 'N/A'}\\nSource: WCT Smart Search`,
+      'END:VCARD'
+    ].filter(Boolean).join('\r\n');
+  }
+
+  // Helper: Calculate "likely to sell" score (1-10)
+  function calculateLikelyToSellScore(data: {
+    lastSaleDate: string;
+    avmValue: number;
+    lastSalePrice: number;
+    propertyType: string;
+    absenteeInd?: string;
+    delinquentYear?: number;
+  }): number {
+    let score = 3; // baseline
+
+    // Years since last sale
+    if (data.lastSaleDate) {
+      const saleDate = new Date(data.lastSaleDate);
+      const years = (Date.now() - saleDate.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+      if (years >= 15) score += 3;
+      else if (years >= 10) score += 2;
+      else if (years >= 5) score += 1;
+    }
+
+    // Equity estimate (AVM vs last sale price)
+    if (data.avmValue && data.lastSalePrice && data.lastSalePrice > 0) {
+      const equityRatio = (data.avmValue - data.lastSalePrice) / data.lastSalePrice;
+      if (equityRatio > 0.5) score += 2;
+      else if (equityRatio > 0.2) score += 1;
+    }
+
+    // Property type signals
+    if (data.propertyType) {
+      const pt = data.propertyType.toUpperCase();
+      if (pt.includes('MULTI') || pt.includes('DUPLEX')) score += 1;
+    }
+
+    // Absentee owner
+    if (data.absenteeInd === 'A') score += 1;
+
+    // Tax delinquency
+    if (data.delinquentYear && data.delinquentYear > 0) score += 2;
+
+    return Math.min(score, 10);
+  }
+
+  // Helper: Parse SMS address into address1 and address2 for ATTOM
+  function parseSMSAddress(input: string): { address1: string; address2: string; city: string; state: string; zip: string } {
+    const parts = input.split(',').map(p => p.trim());
+    let address1 = '';
+    let address2 = '';
+    let city = '';
+    let state = '';
+    let zip = '';
+
+    if (parts.length >= 3) {
+      address1 = parts[0];
+      city = parts[1];
+      const stateZip = parts[2].replace(/USA?$/i, '').trim().split(/\s+/);
+      state = stateZip[0] || '';
+      zip = stateZip[1] || '';
+      address2 = `${city}, ${state}${zip ? ' ' + zip : ''}`;
+    } else if (parts.length === 2) {
+      address1 = parts[0];
+      address2 = parts[1].replace(/,?\s*USA?$/i, '').trim();
+      const stateZip = address2.split(/\s+/);
+      // Try to find state abbreviation (2 uppercase letters)
+      for (let i = 0; i < stateZip.length; i++) {
+        if (/^[A-Z]{2}$/.test(stateZip[i])) {
+          city = stateZip.slice(0, i).join(' ');
+          state = stateZip[i];
+          zip = stateZip.slice(i + 1).join(' ');
+          break;
+        }
+      }
+    } else {
+      address1 = input;
+    }
+
+    return { address1, address2, city, state, zip };
+  }
+
+  // Serve vCard files for MMS
+  app.get('/api/sms/vcard/:searchId', async (req, res) => {
+    try {
+      const { data: search, error } = await supabaseAdmin
+        .from('search_history')
+        .select('result_json')
+        .eq('id', req.params.searchId)
+        .single();
+
+      if (error || !search) {
+        return res.status(404).send('Not found');
+      }
+
+      const result = typeof search.result_json === 'string' ? JSON.parse(search.result_json) : search.result_json;
+      const vcard = generateVCard({
+        ownerName: result.ownerName || 'Unknown',
+        phone: result.phone || '',
+        email: result.email || '',
+        address: result.address || '',
+        avmValue: result.avmValue || 0,
+      });
+
+      res.set({
+        'Content-Type': 'text/vcard',
+        'Content-Disposition': `attachment; filename="contact.vcf"`,
+      });
+      res.send(vcard);
+    } catch (err) {
+      console.error('vCard serve error:', err);
+      res.status(500).send('Error generating vCard');
+    }
+  });
+
+  // Main SMS incoming webhook
+  app.post('/api/sms/incoming', express.urlencoded({ extended: false }), async (req, res) => {
+    const twiml = new twilio.twiml.MessagingResponse();
+    const body = (req.body.Body || '').trim();
+    const fromPhone = req.body.From || '';
+    const toPhone = req.body.To || '';
+
+    console.log(`SMS received from ${fromPhone}: "${body}"`);
+
+    try {
+      // 1. Authenticate sender by phone number in users table
+      // Normalize phone: strip non-digits, handle +1 prefix
+      const normalizedPhone = fromPhone.replace(/\D/g, '');
+      const phoneVariants = [
+        fromPhone,
+        normalizedPhone,
+        normalizedPhone.length === 11 && normalizedPhone.startsWith('1') ? normalizedPhone.slice(1) : normalizedPhone,
+        `+${normalizedPhone}`,
+        `+1${normalizedPhone.length === 10 ? normalizedPhone : normalizedPhone.slice(1)}`,
+      ];
+
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from('users')
+        .select('id, credit_balance, plan')
+        .or(phoneVariants.map(p => `phone.eq.${p}`).join(','))
+        .limit(1)
+        .maybeSingle();
+
+      if (profileError || !profile) {
+        twiml.message('WCT Smart Search: Your phone number is not registered. Sign up at worldclasstitle.com to get started.');
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      const userId = profile.id;
+      const isVip = profile.plan === 'Enterprise' || profile.plan === 'Agency';
+      let credits = profile.credit_balance || 0;
+
+      // 2. Parse command
+      const lowerBody = body.toLowerCase();
+
+      // --- CREDITS command ---
+      if (lowerBody === 'credits') {
+        twiml.message(`💳 WCT Credits\nRemaining: ${credits}\nPlan: ${profile.plan || 'Free'}\nUpgrade at worldclasstitle.com/pricing`);
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // --- HISTORY command ---
+      if (lowerBody === 'history') {
+        const { data: history } = await supabaseAdmin
+          .from('search_history')
+          .select('address, search_type, created_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(5);
+
+        if (!history || history.length === 0) {
+          twiml.message('No search history found. Text an address to get started!');
+        } else {
+          const lines = history.map((h: any, i: number) => {
+            const date = new Date(h.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            return `${i + 1}. ${h.address} (${date})`;
+          });
+          twiml.message(`📋 Last ${history.length} Searches:\n${lines.join('\n')}`);
+        }
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // --- SAVE command ---
+      if (lowerBody === 'save') {
+        const { data: lastSearch } = await supabaseAdmin
+          .from('search_history')
+          .select('id, result_json')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!lastSearch) {
+          twiml.message('No recent search to save. Text an address first!');
+        } else {
+          const baseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
+          const vcardUrl = `${baseUrl}/api/sms/vcard/${lastSearch.id}`;
+          const msg = twiml.message('📇 Contact card from your last search:');
+          msg.media(vcardUrl);
+        }
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // --- CRM command (placeholder) ---
+      if (lowerBody === 'crm') {
+        twiml.message('🔗 CRM push coming soon! Your last search will be automatically synced to HubSpot in a future update.');
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // --- COMPS command ---
+      if (lowerBody.startsWith('comps ')) {
+        const addressInput = body.substring(6).trim();
+        if (!addressInput) {
+          twiml.message('Usage: comps [address]\nExample: comps 123 Main St, Columbus, OH 43215');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        if (!isVip && credits <= 0) {
+          twiml.message('❌ No credits remaining. Upgrade at worldclasstitle.com/pricing');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        const parsed = parseSMSAddress(addressInput);
+        if (!parsed.address1 || !parsed.address2) {
+          twiml.message('Could not parse address. Use format: comps 123 Main St, City, ST 12345');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        const attomKey = process.env.ATTOM_API;
+        if (!attomKey) {
+          twiml.message('Service temporarily unavailable. Please try again later.');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        try {
+          const compsUrl = `https://api.gateway.attomdata.com/property/v2/salescomparables/address/${encodeURIComponent(parsed.address1)}/${encodeURIComponent(parsed.city)}/${encodeURIComponent('US')}/${encodeURIComponent(parsed.state)}/${encodeURIComponent(parsed.zip)}?searchType=Radius&minComps=1&maxComps=3&miles=2`;
+          const compsResponse = await fetch(compsUrl, { headers: { apikey: attomKey, Accept: 'application/json' } });
+
+          if (!compsResponse.ok) {
+            twiml.message('Could not find comparable sales for that address. Please verify and try again.');
+            return res.type('text/xml').send(twiml.toString());
+          }
+
+          const compsData = await compsResponse.json();
+          let properties = compsData.RESPONSE_GROUP?.RESPONSE?.RESPONSE_DATA?.PROPERTY_INFORMATION_RESPONSE_ext?.SUBJECT_PROPERTY_ext?.PROPERTY || [];
+          if (!Array.isArray(properties)) properties = [properties];
+
+          const comps = properties
+            .filter((p: any) => p?.COMPARABLE_PROPERTY_ext)
+            .map((p: any) => {
+              const comp = p.COMPARABLE_PROPERTY_ext?.PROPERTY;
+              if (!comp) return null;
+              const addr = comp.address?.oneLine || comp.address?.line1 || 'Unknown';
+              const price = comp.sale?.amount?.saleAmt || 0;
+              const date = comp.sale?.saleTransDate || '';
+              const sqft = comp.building?.size?.universalsize || 0;
+              return { addr, price, date, sqft };
+            })
+            .filter(Boolean)
+            .slice(0, 3);
+
+          if (comps.length === 0) {
+            twiml.message('No comparable sales found within 2 miles.');
+          } else {
+            const fmtPrice = (v: number) => v ? `$${v.toLocaleString()}` : 'N/A';
+            const lines = comps.map((c: any, i: number) =>
+              `${i + 1}. ${c.addr}\n   ${fmtPrice(c.price)} | ${c.sqft ? c.sqft.toLocaleString() + ' sqft' : ''} | ${c.date || 'N/A'}`
+            );
+            twiml.message(`📊 Comps for ${parsed.address1}:\n\n${lines.join('\n\n')}`);
+          }
+
+          // Deduct credit
+          if (!isVip) {
+            await supabaseAdmin.from('users').update({ credit_balance: credits - 1 }).eq('id', userId);
+          }
+
+          // Log search
+          await supabaseAdmin.from('search_history').insert({
+            user_id: userId,
+            phone_from: fromPhone,
+            address: addressInput,
+            result_json: { comps },
+            search_type: 'comps',
+          });
+
+        } catch (err: any) {
+          console.error('Comps SMS error:', err);
+          twiml.message('Error fetching comps. Please try again.');
+        }
+
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // --- NTS command ---
+      if (lowerBody.startsWith('nts ')) {
+        const ntsInput = body.substring(4).trim();
+        // Parse: last token is price, rest is address
+        const tokens = ntsInput.split(/\s+/);
+        const lastToken = tokens[tokens.length - 1];
+        const priceMatch = lastToken.replace(/[$,]/g, '');
+        const price = parseFloat(priceMatch);
+
+        if (isNaN(price) || tokens.length < 2) {
+          twiml.message('Usage: nts [address] [price]\nExample: nts 123 Main St, Columbus, OH 43215 250000');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        const addressInput = tokens.slice(0, -1).join(' ');
+
+        // Simple NTS calculation
+        const commissionRate = 0.06;
+        const closingCosts = 2500;
+        const transferTaxRate = 4.00;
+        const commission = price * commissionRate;
+        const transferTax = Math.ceil((price / 1000) * transferTaxRate);
+        const estimatedNet = price - commission - closingCosts - transferTax;
+
+        const fmtPrice = (v: number) => `$${Math.round(v).toLocaleString()}`;
+        twiml.message(
+          `💰 Net-to-Seller Estimate\n` +
+          `📍 ${addressInput}\n` +
+          `Sale Price: ${fmtPrice(price)}\n` +
+          `Commission (6%): -${fmtPrice(commission)}\n` +
+          `Closing Costs: -${fmtPrice(closingCosts)}\n` +
+          `Transfer Tax: -${fmtPrice(transferTax)}\n` +
+          `━━━━━━━━━━━━━━\n` +
+          `Est. Net: ${fmtPrice(estimatedNet)}\n\n` +
+          `For detailed estimates, visit worldclasstitle.com`
+        );
+
+        // Log search
+        await supabaseAdmin.from('search_history').insert({
+          user_id: userId,
+          phone_from: fromPhone,
+          address: addressInput,
+          result_json: { price, commission, closingCosts, transferTax, estimatedNet },
+          search_type: 'nts',
+        });
+
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // --- Default: Full property address lookup ---
+      if (!isVip && credits <= 0) {
+        twiml.message('❌ No credits remaining. Upgrade at worldclasstitle.com/pricing');
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      const parsed = parseSMSAddress(body);
+      if (!parsed.address1 || !parsed.address2) {
+        twiml.message(
+          'WCT Smart Search Commands:\n' +
+          '📍 [address] - Property lookup\n' +
+          '📊 comps [address] - Comparable sales\n' +
+          '💰 nts [address] [price] - Net estimate\n' +
+          '📇 save - Save last contact\n' +
+          '💳 credits - Check balance\n' +
+          '📋 history - Last 5 searches'
+        );
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      const attomKey = process.env.ATTOM_API;
+      if (!attomKey) {
+        twiml.message('Service temporarily unavailable. Please try again later.');
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // a. Call ATTOM expandedprofile
+      let ownerName = '';
+      let propertyType = '';
+      let beds = 0;
+      let baths = 0;
+      let sqft = 0;
+      let yearBuilt = 0;
+      let priorSalePrice = 0;
+      let priorSaleDate = '';
+      let absenteeInd = '';
+      let delinquentYear = 0;
+
+      try {
+        const attomUrl = `https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/expandedprofile?address1=${encodeURIComponent(parsed.address1)}&address2=${encodeURIComponent(parsed.address2)}`;
+        const attomResponse = await fetch(attomUrl, { headers: { apikey: attomKey, Accept: 'application/json' } });
+
+        if (!attomResponse.ok) {
+          twiml.message('Could not find property records for that address. Please verify and try again.');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        const attomData = await attomResponse.json();
+        const property = attomData.property?.[0];
+
+        if (!property) {
+          twiml.message('No property records found. Please check the address and try again.');
+          return res.type('text/xml').send(twiml.toString());
+        }
+
+        // Extract owner name (reuse existing logic)
+        const owner1 = property.assessment?.owner?.owner1;
+        const owner2 = property.assessment?.owner?.owner2;
+        let primaryOwner = owner1?.fullName || owner1?.fullname || (owner1?.firstNameAndMi && owner1?.lastName ? `${owner1.firstNameAndMi} ${owner1.lastName}` : '') || (owner1?.firstname && owner1?.lastname ? `${owner1.firstname} ${owner1.lastname}` : '');
+        let secondaryOwner = owner2?.fullName || owner2?.fullname || '';
+        ownerName = primaryOwner && secondaryOwner ? `${primaryOwner} & ${secondaryOwner}` : primaryOwner || secondaryOwner || 'Unknown';
+
+        propertyType = property.summary?.propclass || '';
+        beds = property.building?.rooms?.beds || 0;
+        baths = property.building?.rooms?.bathstotal || 0;
+        sqft = property.building?.size?.universalsize || 0;
+        yearBuilt = property.summary?.yearbuilt || property.building?.summary?.yearbuilt || 0;
+        priorSalePrice = property.sale?.amount?.saleAmt || 0;
+        priorSaleDate = property.sale?.saleTransDate || '';
+        absenteeInd = property.summary?.absenteeInd || '';
+        delinquentYear = property.assessment?.tax?.delinquentYear || 0;
+
+      } catch (attomErr: any) {
+        console.error('ATTOM SMS lookup error:', attomErr);
+        twiml.message('Error looking up property. Please try again.');
+        return res.type('text/xml').send(twiml.toString());
+      }
+
+      // b. Call ATTOM AVM
+      let avmValue = 0;
+      try {
+        const avmUrl = `https://api.gateway.attomdata.com/propertyapi/v1.0.0/avm/snapshot?address1=${encodeURIComponent(parsed.address1)}&address2=${encodeURIComponent(parsed.address2)}`;
+        const avmResponse = await fetch(avmUrl, { headers: { apikey: attomKey, Accept: 'application/json' } });
+        if (avmResponse.ok) {
+          const avmData = await avmResponse.json();
+          avmValue = avmData.property?.[0]?.avm?.amount?.value || 0;
+        }
+      } catch (avmErr) {
+        console.error('AVM SMS lookup error:', avmErr);
+      }
+
+      // c. Call BatchData skip trace (non-blocking - still return ATTOM data if this fails)
+      let phone = '';
+      let email = '';
+      try {
+        const batchDataKey = process.env.BATCHDATA_API_KEY;
+        if (batchDataKey) {
+          // Parse owner name for BatchData
+          const nameParts = (ownerName || '').split(/\s+/);
+          const firstName = nameParts[0] || '';
+          const lastName = nameParts.slice(1).join(' ') || '';
+
+          const batchRequest = {
+            propertyAddress: {
+              street: parsed.address1,
+              city: parsed.city,
+              state: parsed.state,
+              zip: String(parsed.zip).split('-')[0].trim().substring(0, 5),
+            },
+            firstName,
+            lastName,
+          };
+
+          const batchResponse = await fetch('https://api.batchdata.com/api/v1/property/skip-trace', {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              Authorization: `Bearer ${batchDataKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ requests: [batchRequest] }),
+          });
+
+          if (batchResponse.ok) {
+            const batchData = await batchResponse.json();
+            const person = batchData?.results?.persons?.[0] || batchData?.results?.[0]?.data?.persons?.[0] || batchData?.results?.[0]?.persons?.[0];
+            if (person) {
+              const phones = person.phoneNumbers || person.phone_numbers || [];
+              const mostRecent = phones.find((p: any) => p.isMostRecent || p.is_most_recent);
+              const firstPhone = mostRecent || phones[0];
+              phone = firstPhone?.phoneNumber || firstPhone?.phone || firstPhone?.number || '';
+
+              const emails = person.emails || person.email_addresses || [];
+              const primaryEmail = emails.find((e: any) => e.isPrimary || e.is_primary);
+              const firstEmail = primaryEmail || emails[0];
+              email = typeof firstEmail === 'string' ? firstEmail : firstEmail?.email || firstEmail?.email_address || '';
+            }
+          }
+        }
+      } catch (batchErr) {
+        console.error('BatchData SMS skip trace error (non-fatal):', batchErr);
+      }
+
+      // d. Calculate likely to sell score
+      const likelyToSellScore = calculateLikelyToSellScore({
+        lastSaleDate: priorSaleDate,
+        avmValue,
+        lastSalePrice: priorSalePrice,
+        propertyType,
+        absenteeInd,
+        delinquentYear,
+      });
+
+      // e. Deduct credit
+      if (!isVip) {
+        credits -= 1;
+        await supabaseAdmin.from('users').update({ credit_balance: credits }).eq('id', userId);
+      }
+
+      // f. Log search to search_history
+      const lastSaleYear = priorSaleDate ? new Date(priorSaleDate).getFullYear().toString() : '';
+      const resultData = {
+        address: body,
+        ownerName,
+        avmValue,
+        lastSalePrice: priorSalePrice,
+        lastSaleYear,
+        beds,
+        baths,
+        sqft,
+        yearBuilt,
+        phone,
+        email,
+        likelyToSellScore,
+        propertyType,
+      };
+
+      const { data: insertedSearch } = await supabaseAdmin
+        .from('search_history')
+        .insert({
+          user_id: userId,
+          phone_from: fromPhone,
+          address: body,
+          result_json: resultData,
+          search_type: 'property_lookup',
+        })
+        .select('id')
+        .single();
+
+      // g. Format and send SMS reply
+      const smsText = formatSMSResponse({
+        address: body,
+        ownerName,
+        avmValue,
+        lastSalePrice: priorSalePrice,
+        lastSaleYear,
+        beds,
+        baths,
+        sqft,
+        yearBuilt,
+        phone,
+        email,
+        likelyToSellScore,
+        creditsRemaining: credits,
+      });
+
+      twiml.message(smsText);
+      return res.type('text/xml').send(twiml.toString());
+
+    } catch (err: any) {
+      console.error('SMS webhook error:', err);
+      twiml.message('An error occurred. Please try again later.');
+      return res.type('text/xml').send(twiml.toString());
     }
   });
 

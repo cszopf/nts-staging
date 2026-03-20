@@ -19,7 +19,7 @@ const Home = () => {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
 
-  const hasProspectorAccess = user?.is_wct_vip || (user?.skip_trace_credits && user.skip_trace_credits > 0);
+  const hasProspectorAccess = user?.plan === 'Enterprise' || user?.plan === 'Agency' || (user?.credit_balance && user.credit_balance > 0);
   const hasScrubberAccess = user?.membership_level === 'Paid' || user?.membership_level === 'MVP' || user?.is_admin || user?.membership_level === 'VIP';
 
   const firstName = user?.full_name ? user.full_name.split(' ')[0] : 'Agent';
@@ -57,7 +57,7 @@ const Home = () => {
             <div className="bg-[#004EA8]/5 border border-[#004EA8]/10 px-3 py-1.5 rounded-full flex items-center gap-2">
               <Sparkles className="w-3.5 h-3.5 text-[#004EA8]" />
               <span className="text-[11px] font-bold text-[#004EA8] uppercase tracking-wider">
-                Skip Trace Credits: {user?.skip_trace_credits || 0}
+                Credits: {user?.credit_balance || 0}
               </span>
             </div>
 
@@ -67,7 +67,7 @@ const Home = () => {
               <div className="flex flex-col items-end hidden sm:flex">
                 <p className="text-xs font-bold text-slate-900">{user?.full_name || user?.email}</p>
                 <p className="text-[10px] text-slate-400 uppercase tracking-widest font-medium">
-                  {user?.is_wct_vip ? 'VIP Member' : 'Standard Agent'}
+                  {(user?.plan === 'Enterprise' || user?.plan === 'Agency') ? user.plan : 'Standard Agent'}
                 </p>
               </div>
               <button 

@@ -184,7 +184,7 @@ const NeighborhoodProspector = () => {
             <div className="bg-[#004EA8]/5 border border-[#004EA8]/10 px-3 py-1.5 rounded-full flex items-center gap-2">
               <Sparkles className="w-3.5 h-3.5 text-[#004EA8]" />
               <span className="text-[11px] font-bold text-[#004EA8] uppercase tracking-wider">
-                Credits: {user?.skip_trace_credits || 0}
+                Credits: {user?.credit_balance || 0}
               </span>
             </div>
             <button 

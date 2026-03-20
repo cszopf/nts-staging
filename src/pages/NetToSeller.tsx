@@ -1096,7 +1096,7 @@ export default function NetToSeller() {
             <div className="flex flex-col items-end">
               <p className="text-xs font-bold text-[#004EA8]">{user.full_name || user.email}</p>
               <p className="text-[10px] text-gray-400 uppercase tracking-widest">
-                {user.is_wct_vip ? 'VIP / MVP' : 'FREE TIER'} • {user.skip_trace_credits || 0} Credits
+                {(user.plan === 'Enterprise' || user.plan === 'Agency') ? user.plan : 'FREE TIER'} • {user.credit_balance || 0} Credits
               </p>
             </div>
             <button 
